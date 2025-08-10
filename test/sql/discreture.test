@@ -1,0 +1,22 @@
+# name: test/sql/discreture.test
+# description: test discreture extension
+# group: [sql]
+
+# Before we load the extension, this will fail
+statement error
+SELECT discreture('Sam');
+----
+Catalog Error: Scalar Function with name discreture does not exist!
+
+# Require statement will ensure this test is run with this extension loaded
+require discreture
+
+query I
+select count(*) from combinations(27, 15);
+----
+17383860
+
+query I
+select count(*) from permutations(10);
+----
+3628800
