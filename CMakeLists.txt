@@ -8,9 +8,10 @@ set(TARGET_NAME discreture)
 # Note that it should also be removed from vcpkg.json to prevent needlessly installing it..
 find_path(DISCRETURE_INCLUDE_DIRS "discreture.hpp")
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+
 set(EXTENSION_NAME ${TARGET_NAME}_extension)
 set(LOADABLE_EXTENSION_NAME ${TARGET_NAME}_loadable_extension)
 

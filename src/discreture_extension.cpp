@@ -1,3 +1,5 @@
+#include "discreture.hpp"
+
 #include "discreture_extension.hpp"
 #include "duckdb.hpp"
 #include "duckdb/common/exception.hpp"
@@ -5,8 +7,7 @@
 #include "duckdb/function/scalar_function.hpp"
 #include "duckdb/main/extension_util.hpp"
 #include <duckdb/parser/parsed_data/create_scalar_function_info.hpp>
-#include <optional>
-#include "discreture.hpp"
+#include <boost/optional.hpp>
 
 namespace duckdb {
 
@@ -48,11 +49,11 @@ public:
 	      current_work_idx(0) {
 	}
 
-	std::optional<idx_t> GetWorkIdx() {
+	boost::optional<idx_t> GetWorkIdx() {
 		std::lock_guard<std::mutex> lock(mutex);
 		auto result = current_work_idx++;
 		if (result > work.size() - 2) {
-			return std::nullopt;
+			return boost::none;
 		}
 		return result;
 	}
@@ -67,10 +68,10 @@ public:
 };
 
 struct CombLocalState : public LocalTableFunctionState {
-	std::optional<idx_t> work_idx;
+	boost::optional<idx_t> work_idx;
 
 	CombLocalState() {
-		work_idx = std::nullopt;
+		work_idx = boost::none;
 	}
 };
 
@@ -177,7 +178,7 @@ static void CombExec(ClientContext &context, TableFunctionInput &data, DataChunk
 				count++;
 			}
 			if (iterator == global_state.comb.end()) {
-				local_state.work_idx = std::nullopt;
+				local_state.work_idx = boost::none;
 			}
 		} else {
 			while (count < STANDARD_VECTOR_SIZE && iterator != end) {
@@ -189,7 +190,7 @@ static void CombExec(ClientContext &context, TableFunctionInput &data, DataChunk
 				count++;
 			}
 			if (iterator == end) {
-				local_state.work_idx = std::nullopt;
+				local_state.work_idx = boost::none;
 			}
 		}
 		output.SetCardinality(count);

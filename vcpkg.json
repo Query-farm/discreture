@@ -1,7 +1,8 @@
 {
         "dependencies": [
                 "discreture",
-                "boost-multiprecision"
+                "boost-multiprecision",
+                "boost-optional"
         ],
         "vcpkg-configuration": {
                 "overlay-ports": [
