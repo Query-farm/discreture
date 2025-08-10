@@ -283,11 +283,7 @@ std::string DiscretureExtension::Name() {
 }
 
 std::string DiscretureExtension::Version() const {
-#ifdef EXT_VERSION_QUACK
-	return EXT_VERSION_QUACK;
-#else
-	return "";
-#endif
+	return "0.0.1";
 }
 
 } // namespace duckdb
