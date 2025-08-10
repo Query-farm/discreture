@@ -5,7 +5,7 @@
 #include "duckdb/function/scalar_function.hpp"
 #include "duckdb/main/extension_util.hpp"
 #include <duckdb/parser/parsed_data/create_scalar_function_info.hpp>
-
+#include <optional>
 #include "discreture.hpp"
 
 namespace duckdb {
@@ -32,11 +32,45 @@ struct PermBindData : public TableFunctionData {
 // ----------- Global State Structures -----------
 
 struct CombGlobalState : public GlobalTableFunctionState {
-	discreture::Combinations<int> comb;
-	discreture::Combinations<int>::iterator it;
-	idx_t k;
+public:
+	const discreture::Combinations<int> comb;
 
-	CombGlobalState(int n, int k_val) : comb(n, k_val), it(comb.begin()), k(k_val) {
+	std::mutex mutex;
+	const idx_t k;
+
+private:
+	std::vector<discreture::Combinations<int>::iterator> work;
+	idx_t current_work_idx;
+
+public:
+	CombGlobalState(int n, int k_val, int threads)
+	    : comb(n, k_val), work(discreture::divide_work_in_equal_parts(comb.begin(), comb.end(), threads)), k(k_val),
+	      current_work_idx(0) {
+	}
+
+	std::optional<idx_t> GetWorkIdx() {
+		std::lock_guard<std::mutex> lock(mutex);
+		auto result = current_work_idx++;
+		if (result > work.size() - 2) {
+			return std::nullopt;
+		}
+		return result;
+	}
+
+	discreture::Combinations<int>::iterator &GetIter(idx_t idx) {
+		return work[idx];
+	}
+
+	inline bool IsLastIndex(idx_t idx) {
+		return idx == work.size() - 2;
+	}
+};
+
+struct CombLocalState : public LocalTableFunctionState {
+	std::optional<idx_t> work_idx;
+
+	CombLocalState() {
+		work_idx = std::nullopt;
 	}
 };
 
@@ -88,7 +122,13 @@ static unique_ptr<FunctionData> PermBind(ClientContext &context, TableFunctionBi
 
 static unique_ptr<GlobalTableFunctionState> CombInitGlobal(ClientContext &context, TableFunctionInitInput &input) {
 	auto &bind_data = input.bind_data->Cast<CombBindData>();
-	return make_uniq<CombGlobalState>(bind_data.n, bind_data.k);
+	return make_uniq<CombGlobalState>(bind_data.n, bind_data.k, context.db->config.options.maximum_threads);
+}
+
+unique_ptr<LocalTableFunctionState> CombInitLocal(ExecutionContext &context, TableFunctionInitInput &input,
+                                                  GlobalTableFunctionState *global_state) {
+	//	auto &comb_global_state = global_state->Cast<CombGlobalState>();
+	return make_uniq<CombLocalState>();
 }
 
 static unique_ptr<GlobalTableFunctionState> PermInitGlobal(ClientContext &context, TableFunctionInitInput &input) {
@@ -99,25 +139,61 @@ static unique_ptr<GlobalTableFunctionState> PermInitGlobal(ClientContext &contex
 // ----------- Execution Functions -----------
 
 static void CombExec(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
-	auto &state = data.global_state->Cast<CombGlobalState>();
-	idx_t count = 0;
+	auto &global_state = data.global_state->Cast<CombGlobalState>();
+	auto &local_state = data.local_state->Cast<CombLocalState>();
 
 	auto output_vectors = output.data;
 
 	// I want to get these pointers for all contents of the output columns
 	auto data_ptrs = vector<int32_t *>(output.ColumnCount());
+	data_ptrs.reserve(output.ColumnCount());
 	for (idx_t col = 0; col < output.ColumnCount(); col++) {
 		data_ptrs[col] = FlatVector::GetData<int32_t>(output_vectors[col]);
 	}
 
-	while (state.it != state.comb.end() && count < STANDARD_VECTOR_SIZE) {
-		for (idx_t col = 0; col < state.k; col++) {
-			data_ptrs[col][count] = (*state.it)[col];
+	idx_t count = 0;
+	while (count < STANDARD_VECTOR_SIZE) {
+		if (!local_state.work_idx.has_value()) {
+			// Lock the mutex in the global state
+			local_state.work_idx = global_state.GetWorkIdx();
+			if (!local_state.work_idx.has_value()) {
+				output.SetCardinality(count);
+				return;
+			}
 		}
-		++state.it;
-		count++;
+
+		bool is_last = global_state.IsLastIndex(*local_state.work_idx);
+
+		auto &iterator = global_state.GetIter(*local_state.work_idx);
+		auto &end = global_state.GetIter(*local_state.work_idx + 1);
+
+		if (is_last) {
+			while (count < STANDARD_VECTOR_SIZE && iterator != global_state.comb.end()) {
+				const auto &comb = *iterator;
+				for (idx_t col = 0; col < global_state.k; col++) {
+					data_ptrs[col][count] = comb[col];
+				}
+				++iterator;
+				count++;
+			}
+			if (iterator == global_state.comb.end()) {
+				local_state.work_idx = std::nullopt;
+			}
+		} else {
+			while (count < STANDARD_VECTOR_SIZE && iterator != end) {
+				const auto &comb = *iterator;
+				for (idx_t col = 0; col < global_state.k; col++) {
+					data_ptrs[col][count] = comb[col];
+				}
+				++iterator;
+				count++;
+			}
+			if (iterator == end) {
+				local_state.work_idx = std::nullopt;
+			}
+		}
+		output.SetCardinality(count);
 	}
-	output.SetCardinality(count);
 }
 
 static void PermExec(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
@@ -186,7 +262,7 @@ unique_ptr<BaseStatistics> PermStatistics(ClientContext &context, const Function
 
 static void LoadInternal(DatabaseInstance &instance) {
 	TableFunction combinations_func("combinations", {LogicalType::INTEGER, LogicalType::INTEGER}, CombExec, CombBind,
-	                                CombInitGlobal);
+	                                CombInitGlobal, CombInitLocal);
 
 	combinations_func.cardinality = CombCardinality;
 	combinations_func.statistics = CombStatistics;
