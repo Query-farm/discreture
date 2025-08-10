@@ -65,8 +65,6 @@ static unique_ptr<FunctionData> CombBind(ClientContext &context, TableFunctionBi
 		names.push_back("col" + std::to_string(i));
 	}
 
-	hugeint_t foo;
-
 	return make_uniq<CombBindData>(n, k);
 }
 
@@ -144,11 +142,58 @@ static void PermExec(ClientContext &context, TableFunctionInput &data, DataChunk
 	output.SetCardinality(count);
 }
 
+unique_ptr<NodeStatistics> CombCardinality(ClientContext &context, const FunctionData *bind_data) {
+	auto &comb_bind_data = bind_data->Cast<CombBindData>();
+
+	discreture::Combinations<int> comb(comb_bind_data.n, comb_bind_data.k);
+	const auto distance = std::distance(comb.begin(), comb.end());
+
+	return make_uniq<NodeStatistics>(distance, distance);
+}
+
+unique_ptr<NodeStatistics> PermCardinality(ClientContext &context, const FunctionData *bind_data) {
+	auto &perm_bind_data = bind_data->Cast<PermBindData>();
+
+	discreture::Permutations<int> perm(perm_bind_data.n);
+	const auto distance = std::distance(perm.begin(), perm.end());
+
+	return make_uniq<NodeStatistics>(distance, distance);
+}
+
+unique_ptr<BaseStatistics> CombStatistics(ClientContext &context, const FunctionData *bind_data,
+                                          column_t column_index) {
+	auto &comb_bind_data = bind_data->Cast<CombBindData>();
+
+	auto r = NumericStats::CreateEmpty(LogicalType::INTEGER);
+	NumericStats::SetMin(r, 0);
+	NumericStats::SetMax(r, comb_bind_data.n - 1);
+	r.SetHasNoNull();
+	r.SetDistinctCount(comb_bind_data.n);
+	return r.ToUnique();
+}
+
+unique_ptr<BaseStatistics> PermStatistics(ClientContext &context, const FunctionData *bind_data,
+                                          column_t column_index) {
+	auto &perm_bind_data = bind_data->Cast<PermBindData>();
+
+	auto r = NumericStats::CreateEmpty(LogicalType::INTEGER);
+	NumericStats::SetMin(r, 0);
+	NumericStats::SetMax(r, perm_bind_data.n - 1);
+	r.SetHasNoNull();
+	r.SetDistinctCount(perm_bind_data.n);
+	return r.ToUnique();
+}
+
 static void LoadInternal(DatabaseInstance &instance) {
 	TableFunction combinations_func("combinations", {LogicalType::INTEGER, LogicalType::INTEGER}, CombExec, CombBind,
 	                                CombInitGlobal);
 
+	combinations_func.cardinality = CombCardinality;
+	combinations_func.statistics = CombStatistics;
+
 	TableFunction permutations_func("permutations", {LogicalType::INTEGER}, PermExec, PermBind, PermInitGlobal);
+	permutations_func.cardinality = PermCardinality;
+	permutations_func.statistics = PermStatistics;
 
 	ExtensionUtil::RegisterFunction(instance, combinations_func);
 	ExtensionUtil::RegisterFunction(instance, permutations_func);

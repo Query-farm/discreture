@@ -2,12 +2,6 @@
 # description: test discreture extension
 # group: [sql]
 
-# Before we load the extension, this will fail
-statement error
-SELECT discreture('Sam');
-----
-Catalog Error: Scalar Function with name discreture does not exist!
-
 # Require statement will ensure this test is run with this extension loaded
 require discreture
 
@@ -20,3 +14,62 @@ query I
 select count(*) from permutations(10);
 ----
 3628800
+
+query II
+select * from combinations(4, 2) order by 1, 2
+----
+0	1
+0	2
+0	3
+1	2
+1	3
+2	3
+
+# Edge case: k > n (should error)
+statement error
+select * from combinations(2, 3);
+----
+Binder Error: Invalid arguments for combinations: require n > 0, 0 < k <= n
+
+# Edge case: n = 0 (should error)
+statement error
+select * from combinations(0, 0);
+----
+Binder Error: Invalid arguments for combinations: require n > 0, 0 < k <= n
+
+# Large n, k for combinations (small result)
+query IIIII
+select * from combinations(5, 5);
+----
+0	1	2	3	4
+
+# Permutations: basic output
+query III
+select * from permutations(3) order by 1, 2, 3
+----
+0	1	2
+0	2	1
+1	0	2
+1	2	0
+2	0	1
+2	1	0
+
+# Permutations: n = 1
+query I
+select * from permutations(1);
+----
+0
+
+# Permutations: n = 0 (should error)
+statement error
+select * from permutations(0);
+----
+Binder Error: Invalid argument for permutations: require n > 0
+
+# Permutations: n = 2
+query II
+select * from permutations(2) order by 1, 2
+----
+0	1
+1	0
+
