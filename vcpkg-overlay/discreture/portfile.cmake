@@ -1,8 +1,8 @@
 vcpkg_from_github(
     OUT_SOURCE_PATH SOURCE_PATH
     REPO rustyconover/discreture
-    REF 1f35a06a1fc15c965d49bf00626ead8bb2f30999
-    SHA512 9f14feed222534b0ee5be2a6608dcc1af9d9be649ce3cc5394f1b7c0fd91bc83f70964fadd5eced07cb9439992c3cea5173c31cf480d2817f90752e8c40dc321
+    REF eafe006f906e9fa6f79eec0ddd76eeb7de1676e0
+    SHA512 ca293ac3ce7ce9fbcabbbad3e52eceb67dc224ec69e5f2b92b749a4740dab80cb7c1fa5e53eb51be86ecdf95414849e84cbbeea80bfa23d81010a61468b58aa3
     HEAD_REF master
 )
 
