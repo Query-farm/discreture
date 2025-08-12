@@ -73,3 +73,22 @@ select * from permutations(2) order by 1, 2
 0	1
 1	0
 
+query I
+select count(*) from permutations(10);
+----
+3628800
+
+query I
+select count(*) from permutations_array(10);
+----
+3628800
+
+query I
+select count(*) from combinations(25, 12)
+----
+5200300
+
+query I
+select count(*) from combinations_array(25, 12)
+----
+5200300

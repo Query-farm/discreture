@@ -10,159 +10,165 @@
 namespace duckdb {
 
 struct PartitionsBindData : public TableFunctionData {
-	int n;
+	const int n;
 	PartitionsBindData(int n_p) : n(n_p) {
 	}
 };
 
 struct CombBindData : public TableFunctionData {
-	int n;
-	int k;
-	bool return_array;
+	const int n;
+	const int k;
+	const bool return_array;
 	CombBindData(int n_p, int k_p, bool return_array_p) : n(n_p), k(k_p), return_array(return_array_p) {
 	}
 };
 
 struct PermBindData : public TableFunctionData {
-	int n;
-	bool return_array;
+	const int n;
+	const bool return_array;
 	PermBindData(int n_p, bool return_array_p) : n(n_p), return_array(return_array_p) {
 	}
 };
 
 // ----------- Global State Structures -----------
 
-struct CombGlobalState : public GlobalTableFunctionState {
+// Base class for multithreaded iterator-based table functions
+template <typename Iterator>
+class MultithreadedGlobalStateBase : public GlobalTableFunctionState {
 public:
+	atomic<int32_t> completed;
+
+	idx_t MaxThreads() const override {
+		return work.size() > 2 ? work.size() - 2 : 1;
+	}
+
+private:
+	std::mutex mutex_;
+	std::vector<Iterator> work;
+	std::vector<Iterator> stops;
+	idx_t current_work_idx;
+	double progress;
+
+public:
+	MultithreadedGlobalStateBase() : completed(0), current_work_idx(0), progress(0.0) {
+	}
+
+	template <typename Container>
+	void InitializeWork(const Container &container, int threads) {
+		work = discreture::divide_work_in_equal_parts(container.begin(), container.end(), threads);
+		stops = discreture::divide_work_in_equal_parts(container.begin(), container.end(), threads);
+	}
+
+	boost::optional<idx_t> GetWorkIdx() {
+		std::lock_guard<std::mutex> lock(mutex_);
+		auto result = current_work_idx++;
+		if (result > work.size() - 2) {
+			return boost::none;
+		}
+		return result;
+	}
+
+	Iterator &GetIter(idx_t idx) {
+		return work[idx];
+	}
+
+	const Iterator &GetStop(idx_t idx) {
+		return stops[idx];
+	}
+
+	void IncrementCompleted() {
+		completed.fetch_add(1, std::memory_order_relaxed);
+		if (work.size() > 1) {
+			progress = (completed.load() / (double)(work.size() - 1)) * 100.0;
+		}
+	}
+
+	double Progress() const {
+		return progress;
+	}
+
+	inline bool IsLastIndex(idx_t idx) {
+		return idx >= work.size() - 2;
+	}
+};
+
+// Common local state for multithreaded table functions
+struct MultithreadedLocalState : public LocalTableFunctionState {
+	boost::optional<idx_t> work_idx;
+	bool is_last;
+
+	MultithreadedLocalState() : work_idx(boost::none), is_last(false) {
+	}
+};
+
+struct CombGlobalState : public MultithreadedGlobalStateBase<discreture::Combinations<int>::iterator> {
 	const discreture::Combinations<int> comb;
 	const idx_t k;
-	atomic<int32_t> completed;
 
-	idx_t MaxThreads() const override {
-		return work.size() - 2;
-	}
-
-private:
-	std::mutex mutex_;
-	std::vector<discreture::Combinations<int>::iterator> work;
-	const std::vector<discreture::Combinations<int>::iterator> stops;
-	idx_t current_work_idx;
-	double progress;
-
-public:
-	explicit CombGlobalState(int n, int k_val, int threads)
-	    : comb(n, k_val), k(k_val), completed(0),
-	      work(discreture::divide_work_in_equal_parts(comb.begin(), comb.end(), threads)),
-	      stops(discreture::divide_work_in_equal_parts(comb.begin(), comb.end(), threads)), current_work_idx(0),
-	      progress(0.0) {
-	}
-
-	boost::optional<idx_t> GetWorkIdx() {
-		std::lock_guard<std::mutex> lock(mutex_);
-		auto result = current_work_idx++;
-		if (result > work.size() - 2) {
-			return boost::none;
-		}
-		return result;
-	}
-
-	discreture::Combinations<int>::iterator &GetIter(idx_t idx) {
-		return work[idx];
-	}
-
-	const discreture::Combinations<int>::iterator &GetStop(idx_t idx) {
-		return stops[idx];
-	}
-
-	void IncrementCompleted() {
-		completed.fetch_add(1, std::memory_order_relaxed);
-		progress = (completed.load() / (double)(work.size() - 1)) * 100.0;
-	}
-
-	double Progress() const {
-		return progress;
-	}
-
-	inline bool IsLastIndex(idx_t idx) {
-		return idx >= work.size() - 2;
+	explicit CombGlobalState(int n, int k_val, int threads) : comb(n, k_val), k(k_val) {
+		InitializeWork(comb, threads);
 	}
 };
 
-struct CombLocalState : public LocalTableFunctionState {
-	boost::optional<idx_t> work_idx;
-	bool is_last;
+using CombLocalState = MultithreadedLocalState;
 
-	CombLocalState() {
-		work_idx = boost::none;
-		is_last = false;
-	}
-};
-
-struct PermGlobalState : public GlobalTableFunctionState {
-public:
+struct PermGlobalState : public MultithreadedGlobalStateBase<discreture::Permutations<int>::iterator> {
 	const discreture::Permutations<int> perm;
 	const idx_t n;
-	atomic<int32_t> completed;
 
-	idx_t MaxThreads() const override {
-		return work.size() - 2;
+	explicit PermGlobalState(int n_val, int threads) : perm(n_val), n(n_val) {
+		InitializeWork(perm, threads);
 	}
+};
 
-private:
-	std::mutex mutex_;
-	std::vector<discreture::Permutations<int>::iterator> work;
-	const std::vector<discreture::Permutations<int>::iterator> stops;
-	idx_t current_work_idx;
-	double progress;
+using PermLocalState = MultithreadedLocalState;
 
-public:
-	explicit PermGlobalState(int n_val, int threads)
-	    : perm(n_val), n(n_val), completed(0),
-	      work(discreture::divide_work_in_equal_parts(perm.begin(), perm.end(), threads)),
-	      stops(discreture::divide_work_in_equal_parts(perm.begin(), perm.end(), threads)), current_work_idx(0),
-	      progress(0.0) {
-	}
+// ----------- Helper Template Functions -----------
 
-	boost::optional<idx_t> GetWorkIdx() {
-		std::lock_guard<std::mutex> lock(mutex_);
-		auto result = current_work_idx++;
-		if (result > work.size() - 2) {
-			return boost::none;
+// Template function to handle common multithreaded execution pattern
+template <typename GlobalState, typename LocalState, typename Container, typename OutputFunc>
+void ExecuteMultithreaded(GlobalState &global_state, LocalState &local_state, DataChunk &output,
+                          const Container &container, OutputFunc output_func) {
+	idx_t count = 0;
+
+	while (count < STANDARD_VECTOR_SIZE) {
+		if (!local_state.work_idx.has_value()) {
+			local_state.work_idx = global_state.GetWorkIdx();
+			if (!local_state.work_idx.has_value()) {
+				output.SetCardinality(count);
+				return;
+			}
+			local_state.is_last = global_state.IsLastIndex(*local_state.work_idx);
 		}
-		return result;
-	}
 
-	discreture::Permutations<int>::iterator &GetIter(idx_t idx) {
-		return work[idx];
-	}
+		auto &idx = *local_state.work_idx;
+		auto &iterator = global_state.GetIter(idx);
+		auto &end = global_state.GetStop(idx + 1);
 
-	const discreture::Permutations<int>::iterator &GetStop(idx_t idx) {
-		return stops[idx];
+		if (local_state.is_last) {
+			while (count < STANDARD_VECTOR_SIZE && iterator != container.end()) {
+				output_func(*iterator, count);
+				++iterator;
+				count++;
+			}
+			if (iterator == container.end()) {
+				local_state.work_idx = boost::none;
+				global_state.IncrementCompleted();
+			}
+		} else {
+			while (count < STANDARD_VECTOR_SIZE && iterator != end) {
+				output_func(*iterator, count);
+				++iterator;
+				count++;
+			}
+			if (iterator == end) {
+				local_state.work_idx = boost::none;
+				global_state.IncrementCompleted();
+			}
+		}
+		output.SetCardinality(count);
 	}
-
-	void IncrementCompleted() {
-		completed.fetch_add(1, std::memory_order_relaxed);
-		progress = (completed.load() / (double)(work.size() - 1)) * 100.0;
-	}
-
-	double Progress() const {
-		return progress;
-	}
-
-	inline bool IsLastIndex(idx_t idx) {
-		return idx >= work.size() - 2;
-	}
-};
-
-struct PermLocalState : public LocalTableFunctionState {
-	boost::optional<idx_t> work_idx;
-	bool is_last;
-
-	PermLocalState() {
-		work_idx = boost::none;
-		is_last = false;
-	}
-};
+}
 
 // ----------- Bind Functions -----------
 
